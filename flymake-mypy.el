@@ -13,12 +13,17 @@
 ;;   (add-hook 'python-mode-hook #'flymake-mypy-enable)
 
 ;; Changes:
+;;   0.3.0
+;;     - uses mypy's --show-error-end for building more accurate error ranges
+;;       (Requires mypy >= 0.981)
+;;     - fixes issues with mypy errors causing minor freezing while editing
 ;;   0.2.0
 ;;     - use async processing
 ;;   0.1.0
 ;;     - initial release
 
 ;;; Code:
+(require 'project) ;; for project support
 
 (defvar flymake-mypy-executable "python -mmypy"
   "The mypy executable to use for syntax checking.")
@@ -56,7 +61,8 @@
   (let ((source-buffer (current-buffer)))
     (save-restriction
       (widen)
-      (let* ((temp-file (concat (make-temp-file "flymake-mypy") ".py")))
+      (let* ((temp-file (concat (make-temp-file "flymake-mypy") ".py"))
+             (default-directory (cdr (project-current))))
 	(write-region (point-min) (point-max) temp-file nil 'quiet)
 
 	(setq flymake-mypy--proc
