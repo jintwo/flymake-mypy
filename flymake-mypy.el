@@ -23,7 +23,7 @@
 (defvar flymake-mypy-executable "python -mmypy"
   "The mypy executable to use for syntax checking.")
 
-(defvar flymake-mypy-output-pattern "^\\(.*\\.py\\):\\([0-9]+?\\):\\([0-9]+?\\): \\(.*?\\): \\(.*\\)$"
+(defvar flymake-mypy-output-pattern "^\\(.*\\.py\\):\\([0-9]+?\\):\\([0-9]+?\\):\\([0-9]+?\\):\\([0-9]+?\\): \\(.*?\\): \\(.*\\)$"
   "The regex to use for parsing mypy output")
 
 (defvar-local flymake-mypy--proc nil)
@@ -37,6 +37,16 @@
   "Disable the Mypy checker for Flymake."
   (interactive)
   (remove-hook 'flymake-diagnostic-functions 'flymake-mypy--run nil t))
+
+(defun flymake-mypy--get-position (buffer line column)
+  "Calculate position for the given LINE and COLUMN."
+  (interactive)
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (forward-line (1- line))  ;; starting from line 1
+      (move-to-column column)
+      (point))))
 
 (defun flymake-mypy--run (report-fn &rest _args)
   ;; Not having a python interpreter is a serious problem which should cause
@@ -58,6 +68,7 @@
 	       :command (mapcar (lambda (x) (shell-quote-argument x))
 	       			(flatten-list (list (split-string flymake-mypy-executable " ")
 						    "--show-column-numbers"
+                                                    "--show-error-end"
 						    "--show-absolute-path"
 						    "--shadow-file"
 						    (buffer-file-name source-buffer)
@@ -73,11 +84,15 @@
 			     (goto-char (point-min))
 			     (cl-loop
 			      while (search-forward-regexp flymake-mypy-output-pattern nil t)
+			      for line = (match-string 0)
 			      for filename = (match-string 1)
 			      for line-num = (string-to-number (match-string 2))
-			      for col-num = (string-to-number (match-string 3))
-			      for error-level = (match-string 4)
-			      for description  = (format "Mypy (%s): (%s)" error-level (match-string 5))
+			      ;; mypy column numbers are off by 1
+			      for col-num = (1- (string-to-number (match-string 3)))
+                              for end-line-num = (string-to-number (match-string 4))
+                              for end-col-num = (string-to-number (match-string 5))
+			      for error-level = (match-string 6)
+			      for description  = (format "Mypy (%s): (%s)" error-level (match-string 7))
 			      for flymake-err-type = (cond ((string-equal error-level "error") :error)
 							   ((string-equal error-level "warning") :warning)
 							   (t :note))
@@ -85,13 +100,16 @@
 			      ;; for some reason mypy will sometimes randomly include messages
 			      ;; for files not asked for
 			      (if (string-equal (buffer-file-name source-buffer) filename)
-				  (let ((err-region (flymake-diag-region source-buffer line-num col-num)))
-				    (flymake-make-diagnostic
-				     source-buffer
-				     (car err-region)
-				     (cdr err-region)
-				     flymake-err-type
-				     description))
+				  (progn
+				    (let* ((beg-region (flymake-mypy--get-position source-buffer line-num col-num))
+					   (end-region (flymake-mypy--get-position source-buffer end-line-num end-col-num)))
+
+                                      (flymake-make-diagnostic
+				       source-buffer
+				       beg-region
+				       end-region
+				       flymake-err-type
+				       description)))
 				(flymake-make-diagnostic
 				 filename
 				 (cons line-num col-num)
@@ -99,7 +117,10 @@
 				 flymake-err-type
 				 description))
 			      into diags
-			      finally (funcall report-fn diags)))
+			      finally (progn
+					(if diags
+					    (funcall report-fn diags)
+					  (funcall report-fn (list))))))
 			 (flymake-log :warning "Canceling obsolete check %s" proc))
 		     ;; unwind protect is similar to try/finally. this is the finally clause
 		     (kill-buffer (process-buffer proc)))))))))))
